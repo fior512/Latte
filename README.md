@@ -1,7 +1,6 @@
 # ☕️ Latte
 
 ![GitHub last commit](https://img.shields.io/github/last-commit/MoonFlowww/Latte?logo=github)
-![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-587-blue?logo=github)
 
 Single header C++17 telemetry library.
 Goal: least possible overhead, an API you can use in one line, and built in statistics.
@@ -27,35 +26,35 @@ Goal: least possible overhead, an API you can use in one line, and built in stat
 | `Hard` | `lfence` + `__rdtscp` | full serialize | tiny snippets, few dozen cycles |
 
 ```cpp
-#include <chrono>
+#include <cstdint>
 #include <iostream>
-#include <thread>
+#include <string>
 
-#include <Latte.hpp>
+#include "Latte.hpp"
 
 static int sum(int a, int b) { return a + b; }
 
 int main() {
-    // API 1: RAII | ID: main | Mode: `Fast` by default
-    LATTE_RAII(); // LATTE_RAII(_mode_) to tune
-    int sum = 0;
-    
-    // API 2: Custom range
-    Latte::Mid::Start("sumRange");
-    sum = sum(2, 3);
-    Latte::Mid::Stop("sumRange");
+  // API 1: RAII | ID: main | Mode: `Fast` by default
+  LATTE_RAII();  // LATTE_RAII(_mode_) to tune
+  int x = 0;
 
-    // API 3: Expr | ID: #expr | Mode: `Fast` only
-    sum += LATTE_FIELD(sum(2, 3));
+  // API 2: Custom range
+  Latte::Mid::Start("sum");
+  x = sum(2, 3);
+  Latte::Mid::Stop("sum");
 
-    // API 4: Toroidal | Mode `Fast` only
-    for (int i = 0; i < 5; ++i) {
-        sum++;
-        LATTE_PULSE("LoopPulse"); /*single rdtsc (i=0: now, i=1: prev-now, ..) */
-    }
-    
-    Latte::DumpToStream(std::cout, Latte::Parameter::Time);
-    return "\1"[!(sum ^ 15)];
+  // API 3: Expr | ID: #expr | Mode: `Fast` only
+  x += LATTE_FIELD(sum(2, 3));
+
+  // API 4: Toroidal | Mode `Fast` only
+  for (int i = 0; i < 5; ++i) {
+    x++;
+    LATTE_PULSE("LoopPulse"); /*single rdtsc (i=0: now, i=1: prev-now, ..) */
+  }
+
+  Latte::DumpToStream(std::cout, Latte::Parameter::Time);
+  return "\1"[!(x ^ 15)];
 }
 ```
 
@@ -63,51 +62,59 @@ int main() {
 
 ```cpp
 #include <vector>
+#include <iostream>
+#include <stdint.h>
+#include <string>
 
 #include "Latte.hpp"
 
 int main() {
+  int sum = 0;
+  for (int i = 0; i < 5; i++) sum = LATTE_FIELD(1 + 1);
 
-    int sum = 0;
-    for(int i = 0; i < 5; i++)
-        sum = LATTE_FIELD(1+1);
-    
-   
-    /* Extracting inside the prgrm: */
-    std::vector<uint64_t> cycles = Latte::Snapshot("sum"); // return struct SnapshotResult
-    std::vector<double> ns = Latte::ToNs(cycles);
-    // or
-    std::vector<double> ns = Latte::Snapshot("sum").to_ns();
+  /* Extracting inside the prgrm: */
+  std::vector<uint64_t> cycles = Latte::Snapshot("sum");  // return struct SnapshotResult
+  std::vector<double> ns = Latte::ToNs(cycles);
+  // or
+  std::vector<double> ns_ = Latte::Snapshot("sum").to_ns();
 
-    
-    /* Extracting outside of the prgm */
-    // @param 1: stream
-    // @param 2: Cycles or Times (TSC, ns)
-    // @param 3: Raw or Calibrated (Raw, cleaned of self-monitored overhead)
-    Latte::DumpToStream(std::cout, Latte::Parameter::Time, Latte::Parameter::Raw);
 
-    Latte::DumpToJson("output/path/data.json"); // format Perfetto-ready
+  /* Extracting outside of the prgm */
+  // @param 1: stream
+  // @param 2: Cycles or Times (TSC, ns)
+  // @param 3: Raw or Calibrated (Raw, cleaned of self-monitored overhead)
+  Latte::DumpToStream(std::cout, Latte::Parameter::Time, Latte::Parameter::Raw);
+
+  Latte::DumpToJson("output/path/data.json");  // format Perfetto-ready
 }
 ```
 
 ### Additional APIs
 
 ```cpp
+#include <cstdint>
+#include <cstdio>
+#include <random>
+#include <string>
+
 #include "Latte.hpp"
 
 int main() {
-    LATTE_FIELD(code());
-    auto tsc = Latte::Snapshot("code");
+  LATTE_FIELD(std::random_device()());
+  uint64_t tsc = Latte::Snapshot("std::random_device()()")[0];
 
-    /* For manual translation */
-    double cycles_per_ns = 0;
-    LATTE_FREQ(cycles_per_ns); // Ghz == cycles/ns
-    double time = tsc/cycles_per_ns; //TSC -> ns
-    
-    /* Automatic scaling of large values */
-    // eg: 10'000'000.0ns -> 10.0ms
-    std::string time_str = Latte::FormatTime(time);
-    // works for: ns, us, ms, s and min
+  /* For manual translation */
+  double cycles_per_ns = 0;
+  LATTE_FREQ(cycles_per_ns);          // Ghz == cycles/ns
+  double time = tsc / cycles_per_ns;  //TSC -> ns
+
+  /* Automatic scaling of large values */
+  // eg: 10'000'000.0ns -> 10.0ms
+  std::string time_str = Latte::FormatTime(time);
+  // works for: ns, us, ms, s and min
+
+  printf("rand() took %s to compute", time_str.c_str());
+  //returns: "rand() took 10.39 us to compute"
 }
 ```
 
