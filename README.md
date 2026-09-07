@@ -16,7 +16,7 @@ Goal: least possible overhead, an API you can use in one line, and built in stat
 
 ## Public API
 
-### Modes and monitoring calls
+### Monitoring
 
 3 modes, pick by tradeoff between overhead and ordering:
 
@@ -26,149 +26,93 @@ Goal: least possible overhead, an API you can use in one line, and built in stat
 | `Mid` | `__rdtscp` | partial barrier | default function profiling |
 | `Hard` | `lfence` + `__rdtscp` | full serialize | tiny snippets, few dozen cycles |
 
-#### `Latte::Fast::Start(id)` / `Latte::Fast::Stop(id)`
-
-Manual pair, any block (same API for `Mid`, `Hard`):
-
 ```cpp
-Latte::Fast::Start("ProcessOrder");
-// work
-Latte::Fast::Stop("ProcessOrder");
-```
+#include <chrono>
+#include <iostream>
+#include <thread>
 
-- `id` is a string literal, no registration needed.
-- Nesting works up to 64 active slots per thread, any mix of modes:
+#include <Latte.hpp>
 
-```cpp
-Latte::Fast::Start("Frame_Total");
-Latte::Mid::Start("Physics_Engine");
-Latte::Mid::Stop("Physics_Engine");
-Latte::Fast::Stop("Frame_Total");
-```
+static int sum(int a, int b) { return a + b; }
 
-#### `LATTE_RAII(mode)`
+int main() {
+    // API 1: RAII | ID: main | Mode: `Fast` by default
+    LATTE_RAII(); // LATTE_RAII(_mode_) to tune
+    int sum = 0;
+    
+    // API 2: Custom range
+    Latte::Mid::Start("sumRange");
+    sum = sum(2, 3);
+    Latte::Mid::Stop("sumRange");
 
-Scope guard. Start on construction, Stop on scope exit, return, or exception:
+    // API 3: Expr | ID: #expr | Mode: `Fast` only
+    sum += LATTE_FIELD(sum(2, 3));
 
-```cpp
-void ProcessOrder() {
-    LATTE_RAII(); // Fast mode, id = __func__
-    if (SomeCondition()) return; // Stop() fires automatically when leaving
-    // work
+    // API 4: Toroidal | Mode `Fast` only
+    for (int i = 0; i < 5; ++i) {
+        sum++;
+        LATTE_PULSE("LoopPulse"); /*single rdtsc (i=0: now, i=1: prev-now, ..) */
+    }
+    
+    Latte::DumpToStream(std::cout, Latte::Parameter::Time);
+    return "\1"[!(sum ^ 15)];
 }
 ```
 
-- Defaults to Fast. `LATTE_RAII(Mid)` and `LATTE_RAII(Hard)` pick a mode.
-- Inside a lambda, `__func__` is `"operator()"`, not the enclosing function name.
-- Nesting follows normal C++ destruction order (LIFO), same as manual Start/Stop.
-- Prefer this over manual Start/Stop: an early return or exception between a manual pair leaves the stack unbalanced.
-
-#### `LATTE_FIELD(expr)`
-
-Runs `expr`, times it in Fast mode, returns its result unchanged:
+### Extracting telemetry
 
 ```cpp
-int out = LATTE_FIELD(Compute(x, y)); // recorded under "Compute"
-```
+#include <vector>
 
-- `expr` can be any call, with any inputs, arguments flow through normally.
-- Result keeps its value category: an lvalue result comes back as a reference, not a copy.
-- Always Fast mode, no mode argument.
-- The recorded id is the name of the wrapped call, not the caller's function: the expression is kept up to the first `(` (or used whole when there is none), capped at 128 chars. `LATTE_FIELD(std::min(a, b))` records as `std::min`.
+#include "Latte.hpp"
 
-#### `LATTE_PULSE(id)`
+int main() {
 
-Cycle delta between successive calls, same thread. Used inside loops:
+    int sum = 0;
+    for(int i = 0; i < 5; i++)
+        sum = LATTE_FIELD(1+1);
+    
+   
+    /* Extracting inside the prgrm: */
+    std::vector<uint64_t> cycles = Latte::Snapshot("sum"); // return struct SnapshotResult
+    std::vector<double> ns = Latte::ToNs(cycles);
+    // or
+    std::vector<double> ns = Latte::Snapshot("sum").to_ns();
 
-```cpp
-for (;;) {
-    // poll or process
-    LATTE_PULSE("Toroidal_Record");
+    
+    /* Extracting outside of the prgm */
+    // @param 1: stream
+    // @param 2: Cycles or Times (TSC, ns)
+    // @param 3: Raw or Calibrated (Raw, cleaned of self-monitored overhead)
+    Latte::DumpToStream(std::cout, Latte::Parameter::Time, Latte::Parameter::Raw);
+
+    Latte::DumpToJson("output/path/data.json"); // format Perfetto-ready
 }
 ```
 
-- First call sets the reference point, pushes no sample.
-
-### Runtime extraction
-
-#### `Latte::Snapshot(id)`
-
-Pull raw cycle samples for one ID, across all threads, at any point at runtime. Returns a read-only result that behaves like the underlying vector:
+### Additional APIs
 
 ```cpp
-auto samples = Latte::Snapshot("Physics_Engine");
-size_t n = samples.size();
-for (Latte::Cycles c : samples) { /* ... */ }
+#include "Latte.hpp"
+
+int main() {
+    LATTE_FIELD(code());
+    auto tsc = Latte::Snapshot("code");
+
+    /* For manual translation */
+    double cycles_per_ns = 0;
+    LATTE_FREQ(cycles_per_ns); // Ghz == cycles/ns
+    double time = tsc/cycles_per_ns; //TSC -> ns
+    
+    /* Automatic scaling of large values */
+    // eg: 10'000'000.0ns -> 10.0ms
+    std::string time_str = Latte::FormatTime(time);
+    // works for: ns, us, ms, s and min
+}
 ```
 
-#### `Latte::Snapshot(id).to_ns()`
+`LATTE_FREQ()` cost 120ms, is called inside `DumpTo*`, `ToNs` or `.to_ns()` only once the first time.
 
-Translates raw snapshot values to nanoseconds using the calibrated CPU frequency:
-
-```cpp
-std::vector<double> ns = Latte::Snapshot("Physics_Engine").to_ns();
-```
-
-Same result through the free function `Latte::ToNs`:
-
-```cpp
-std::vector<Latte::Cycles> raw = Latte::Snapshot("Physics_Engine");
-std::vector<double> ns = Latte::ToNs(raw);
-```
-
-- Same deferred one-time calibration as the dumps: the first call costs about 120 ms, then cached.
-- One `double` per input sample, empty in means empty out.
-- Raw values only: the per-mode Start/Stop self-offset is not subtracted. Use `DumpToStream` with `Parameter::Calibrated` when you need that.
-
-#### `LATTE_FREQ(cycles_per_ns)`
-
-Estimates the CPU's cycles per nanosecond, writes it into the variable you pass:
-
-```cpp
-double cpns;
-LATTE_FREQ(cpns); // ~120 ms measurement against CLOCK_MONOTONIC_RAW
-```
-
-- `DumpToStream`, `DumpToJson`, and `ToNs` call this internally the first time they need calibrated time.
-- You only call it yourself if you need `cycles_per_ns` outside those.
-
-#### `Latte::FormatTime(ns)`
-
-Translation helper, turns a raw nanosecond value into a human string with the right unit:
-
-```cpp
-std::string s = Latte::FormatTime(1882.44); // "1.88 us"
-```
-
-- Picks ns, us, ms, s, or min based on magnitude.
-- Used internally by `DumpToStream` in `Parameter::Time` mode.
-
-### Dumping data
-
-#### `Latte::DumpToStream`
-
-Human readable report, call once after all worker threads finish instrumenting:
-
-```cpp
-Latte::DumpToStream(std::cout, Latte::Parameter::Time, Latte::Parameter::Calibrated);
-```
-
-- Defaults: `Parameter::Cycle`, `Parameter::Raw`.
-- Calibrated mode subtracts measured Start/Stop overhead per mode pair before computing stats, and prints that overhead as a second table.
-
-#### `Latte::DumpToJson`
-
-Flat Chrome Trace JSON array, every sample, all threads:
-
-```cpp
-Latte::DumpToJson("dump.json");
-```
-
-- Drop the file into Perfetto (ui.perfetto.dev) or chrome://tracing.
-- Each bar spans `ts` to `ts + dur`. Nesting is computed from bar overlap, one lane per real OS thread id.
-- A `LATTE_PULSE` bar is one loop iteration. Consecutive pulses form one fused bar spanning the whole loop.
-- Raw values only, no overhead subtraction, no outlier filtering.
-- Zoom in first (`W`/`S` in Perfetto): a fresh run spans hours to nanoseconds and looks blank until you do.
 
 ---
 
@@ -176,7 +120,7 @@ Latte::DumpToJson("dump.json");
 
 ### Technology used
 
-- C++17, header only, no dependencies outside the standard library.
+- C++17, header only, no dependencies.
 - x86_64 intrinsics: `__rdtsc`, `__rdtscp`, `_mm_lfence` (`<x86intrin.h>` on GCC/Clang, `<intrin.h>` on MSVC).
 - `thread_local` storage, no cross thread locking on the hot path.
 - Chrome Trace Event Format for the JSON export, so any Perfetto or `chrome://tracing` build can load it with no custom tooling.
@@ -185,6 +129,7 @@ Latte::DumpToJson("dump.json");
 
 - **Zero contention**: each thread owns its own `ThreadStorage` and ring buffers. No mutex, no atomic, on `Start`/`Stop`/`LATTE_PULSE`/`LATTE_RAII`/`LATTE_FIELD`. The global mutex only guards the list of thread pointers, not the data inside them.
 - **ID as pointer**: IDs are `const char*`, compared and stored by address. No string hashing, no `strcmp`. Only string literals or stable static storage are safe to pass.
+- **Simultaneous Open Records**: By default, the number of simultaneous open-records must no exceed `MAX_ACTIVE_SLOTS = 64`. If does overflow, Start silently no-ops (`stack_ptr < MAX_ACTIVE_SLOTS`` check) but `Stop` still pops unconditionally, which desyncs id-depth, leading to unusable telemetry.
 - **Fixed size ring buffer**: 65536 samples per `(thread, ID)` by default (`BUFFER_PWR = 16`, must stay a power of 2 for the bitmask wrap). Bounded memory, no runtime growth, oldest sample silently overwritten past capacity.
 - **Cache friendly layout**: `alignas(64)` ring buffers and Structure of Arrays for the per thread stack, so only the timing fields a hot path needs land in the same cache line.
 - **Deferred calibration**: overhead measurement runs once, lazily, on first `DumpToStream`/`DumpToJson` call that needs it, not on every `Start`/`Stop`. Steady state sampling pays nothing for it.
