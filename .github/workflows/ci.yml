@@ -43,11 +43,10 @@ jobs:
       - name: Run sanity checks (enabled + LATTE_DISABLE builds)
         run: just CXX=${{ matrix.compiler }} run-sanity
 
-      - name: Smoke-run speedtest/accuracy/testcase (compile+run+exit 0 only, no timing assertions)
+      - name: Run api_smoke/accuracy (asserted checks, cheap iteration counts)
         run: |
-          just CXX=${{ matrix.compiler }} run-speed
+          just CXX=${{ matrix.compiler }} run-api-smoke
           just CXX=${{ matrix.compiler }} run-accuracy
-          just CXX=${{ matrix.compiler }} run-test
 
   sanitize:
     name: sanitize (${{ matrix.sanitizer }})
