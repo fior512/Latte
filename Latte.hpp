@@ -7,6 +7,7 @@
 
   #include <algorithm>
   #include <array>
+  #include <atomic>
   #include <cmath>
   #include <cstdio>
   #include <cstring>
@@ -66,7 +67,8 @@
   #define LATTE_FREQ(cycles_per_ns)                                          \
     do {                                                                     \
       struct timespec t1, t2;                                                \
-      for (volatile int _i = 0; _i < 1000000; _i++);                         \
+      for (int _i = 0; _i < 1000000; ++_i)                                 \
+        std::atomic_signal_fence(std::memory_order_seq_cst);               \
       clock_gettime(CLOCK_MONOTONIC_RAW, &t1);                               \
       uint64_t c1 = Latte::Intrinsic::RDTSC();                               \
       struct timespec start = t1;                                            \
@@ -544,7 +546,7 @@ inline void Manager::Calibrate() {
       const auto& stop_api = MODE_TABLE[stop_mode];
       const char* label = CALIB_LABELS[start_mode][stop_mode];
 
-      for (volatile int i = 0; i < iters; ++i) {
+      for (int i = 0; i < iters; ++i) {
         Internal::LFENCE();
         start_api.start(label);
         stop_api.stop(label);
@@ -554,7 +556,7 @@ inline void Manager::Calibrate() {
   }
 
   // PULSE SELF-OFFSET
-  for (volatile int i = 0; i < iters; ++i) {
+  for (int i = 0; i < iters; ++i) {
     Internal::LFENCE();
     Latte::Fast::Start(Internal::CALIB_PULSE);
     LATTE_PULSE("InternalCalibPulse");
