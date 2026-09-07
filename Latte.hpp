@@ -345,9 +345,10 @@ class Manager {
     return calib_offsets[key];
   }
 
-  void Register(ThreadStorage* thread) {
+  void Register(std::unique_ptr<ThreadStorage> thread) {
     std::lock_guard<std::mutex> lock(mutex);
-    Threads.push_back(thread);
+    Threads.push_back(thread.get());
+    Owned.push_back(std::move(thread));
   }
 
   std::vector<Cycles> ExtractRaw(ID id) {
@@ -389,6 +390,7 @@ class Manager {
   std::once_flag calibrate_once;
   std::array<Cycles, Internal::CALIB_KEY_COUNT> calib_offsets{};
   std::array<bool, Internal::CALIB_KEY_COUNT> calib_valid{};
+  std::vector<std::unique_ptr<ThreadStorage>> Owned;
 };
 
 
@@ -396,9 +398,10 @@ class Manager {
 inline ThreadStorage* GetThreadStorage() {
   static thread_local ThreadStorage* thread = nullptr;
   if (__builtin_expect(!thread, 0)) {
-    thread = new ThreadStorage();
+    auto owned = std::make_unique<ThreadStorage>();
+    thread = owned.get();
     thread->tid = Internal::CurrentThreadId();
-    Manager::Get().Register(thread);
+    Manager::Get().Register(std::move(owned));
   }
   return thread;
 }
