@@ -259,24 +259,17 @@ int main() {
     CHECK(Latte::GetThreadStorage()->stack_ptr == depth_before);
   }
 
-  // LATTE_FIELD must run expr, return its value, and record a sample under
-  // the wrapped call's name ("add"), not the caller's function name. IDs are
-  // keyed by address, so the FieldId buffer cannot be looked up with a string
-  // literal; count by content instead.
+  // LATTE_FIELD must run expr, return its value, and record under the
+  // callee expr, not the caller. The id is the stringized literal, so
+  // Snapshot() resolves it by address.
   {
     auto add = [](int a, int b) { return a + b; };
-    auto count_add = [&]() -> size_t {
-      size_t n = 0;
-      for (auto& [id, vec] : Latte::Manager::Get().ExtractSamplesGlobal()) {
-        if (id != nullptr && std::string(id) == "add") n += vec.size();
-      }
-      return n;
-    };
-    size_t before = count_add();
+    const size_t before = Latte::Snapshot("add(19, 23)").size();
+    const size_t caller_before = Latte::Snapshot("main").size();
     int out = LATTE_FIELD(add(19, 23));
     CHECK(out == 42);
-    size_t after = count_add();
-    CHECK(after == before + 1);
+    CHECK(Latte::Snapshot("add(19, 23)").size() == before + 1);
+    CHECK(Latte::Snapshot("main").size() == caller_before);
   }
 
   // LATTE_FIELD preserves value category: an lvalue expr comes back as a
@@ -287,6 +280,23 @@ int main() {
     r = 9;
     CHECK(v == 9);
     CHECK(&r == &v);
+  }
+
+  // A parenthesized expr must keep its full text as id. Truncating at the
+  // first '(' used to yield an empty id here.
+  {
+    int a = 1, b = 2, c = 3;
+    CHECK(LATTE_FIELD((a + b) * c) == 9);
+    CHECK(Latte::Snapshot("(a + b) * c").size() == 1);
+  }
+
+  // Two call sites sharing one expr text share one id, so their samples
+  // land in the same series.
+  {
+    std::vector<int> v{1, 2, 3};
+    LATTE_FIELD(v.size());
+    LATTE_FIELD(v.size());
+    CHECK(Latte::Snapshot("v.size()").size() == 2);
   }
 
   std::cout << "sanity (enabled build): " << g_checks << " checks passed\n";

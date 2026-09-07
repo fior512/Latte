@@ -511,27 +511,11 @@ struct ScopeGuard {
 
 
 namespace Internal {
-template <class F>
-struct FieldId {
-  static const char* Get(const char* expr) {
-    static char buf[128];
-    size_t n = 0;
-    const char* p = expr;
-    while (*p == ' ' || *p == '\t') ++p;
-    while (*p && *p != '(' && n + 1 < sizeof(buf)) buf[n++] = *p++;
-    while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t')) --n;
-    buf[n] = '\0';
-    return buf;
-  }
-};
-
-
-
+// id is the stringized expr
 template <void (*StartF)(ID), void (*StopF)(ID), class F>
 __attribute__((always_inline)) inline decltype(auto) TimedEval(
-    const char* expr, F&& f
+    ID id, F&& f
 ) {
-  static const char* id = FieldId<F>::Get(expr);
   ScopeGuard<StartF, StopF> _g(id);
   return static_cast<F&&>(f)();
 }
