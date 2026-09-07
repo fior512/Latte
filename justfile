@@ -14,18 +14,20 @@ TRACY_PREFIX := env_var("HOME") + "/.local/src/tracy"
 
 default: all
 
-all: setup testcase speedtest accuracy sanity sanity-disabled
+all: setup api-smoke accuracy sanity sanity-disabled
   @echo " All binaries compiled successfully"
 
 setup:
   @mkdir -p {{BIN_DIR}}
   @echo "Created {{BIN_DIR}}/ directory"
 
-testcase: setup
-  @echo "-> Compiling testcase..."
-  {{CXX}} {{CXXFLAGS}} {{INCLUDE}} {{TEST_DIR}}/testcase.cpp -o {{BIN_DIR}}/testcase {{LDFLAGS}}
-  @echo "Built {{BIN_DIR}}/testcase"
+api-smoke: setup
+  @echo "-> Compiling api_smoke..."
+  {{CXX}} {{CXXFLAGS}} {{INCLUDE}} {{TEST_DIR}}/api_smoke.cpp -o {{BIN_DIR}}/api_smoke {{LDFLAGS}}
+  @echo "Built {{BIN_DIR}}/api_smoke"
 
+# Manual benchmark harness, not part of `all`/`run`/CI: timing numbers are
+# too noisy on shared runners (see .github/workflows/ci.yml header comment).
 speedtest: setup
   @echo "-> Compiling speedtest..."
   {{CXX}} {{CXXFLAGS}} {{INCLUDE}} {{TEST_DIR}}/speedtest.cpp -o {{BIN_DIR}}/speedtest {{LDFLAGS}}
@@ -47,9 +49,9 @@ sanity-disabled: setup
 
 
 
-run-test: testcase
-  @echo "-> Running testcase.cpp ..."
-  @./{{BIN_DIR}}/testcase
+run-api-smoke: api-smoke
+  @echo "-> Running api_smoke.cpp ..."
+  @./{{BIN_DIR}}/api_smoke
 
 run-speed: speedtest
   @echo "-> Running speedtest.cpp ..."
@@ -65,7 +67,7 @@ run-sanity: sanity sanity-disabled
   @echo "-> Running sanity.cpp [LATTE_DISABLE] ..."
   @./{{BIN_DIR}}/sanity_disabled
 
-run: run-speed run-test run-accuracy run-sanity
+run: run-api-smoke run-accuracy run-sanity
 
 bench-caliper: setup
   @echo "-> Compiling caliper_bench.cpp [Caliper: {{CALIPER_PREFIX}}]..."
