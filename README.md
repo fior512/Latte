@@ -79,7 +79,7 @@ int main() {
   std::vector<double> ns_ = Latte::Snapshot("sum").to_ns();
 
 
-  /* Extracting outside of the prgm */
+  /* Dumping data */
   // @param 1: stream
   // @param 2: Cycles or Times (TSC, ns)
   // @param 3: Raw or Calibrated (Raw, cleaned of self-monitored overhead)
@@ -105,11 +105,11 @@ int main() {
 
   /* For manual translation */
   double cycles_per_ns = 0;
-  LATTE_FREQ(cycles_per_ns);          // Ghz == cycles/ns
+  LATTE_FREQ(cycles_per_ns); // Ghz == cycles/ns
   double time = tsc / cycles_per_ns;  //TSC -> ns
 
   /* Automatic scaling of large values */
-  // eg: 10'000'000.0ns -> 10.0ms
+  // eg: 10'000.0 -> "10.0 us"
   std::string time_str = Latte::FormatTime(time);
   // works for: ns, us, ms, s and min
 
@@ -134,14 +134,14 @@ int main() {
 
 ### Design choices
 
-- **Zero contention**: each thread owns its own `ThreadStorage` and ring buffers. No mutex, no atomic, on `Start`/`Stop`/`LATTE_PULSE`/`LATTE_RAII`/`LATTE_FIELD`. The global mutex only guards the list of thread pointers, not the data inside them.
-- **ID as pointer**: IDs are `const char*`, compared and stored by address. No string hashing, no `strcmp`. Only string literals or stable static storage are safe to pass.
-- **Simultaneous Open Records**: By default, the number of simultaneous open-records must no exceed `MAX_ACTIVE_SLOTS = 64`. If does overflow, Start silently no-ops (`stack_ptr < MAX_ACTIVE_SLOTS`` check) but `Stop` still pops unconditionally, which desyncs id-depth, leading to unusable telemetry.
-- **Fixed size ring buffer**: 65536 samples per `(thread, ID)` by default (`BUFFER_PWR = 16`, must stay a power of 2 for the bitmask wrap). Bounded memory, no runtime growth, oldest sample silently overwritten past capacity.
+- **Zero contention**: each thread owns its own `ThreadStorage` and ring buffers. No mutex, no atomic, inside `Capture Fn`.
+- **ID as pointer**: IDs are `const char*`, compared and stored by address. Only string literals or stable static storage are safe to pass.
+- **Simultaneous Open Records**: By default, the number of simultaneous open-records must no exceed `MAX_ACTIVE_SLOTS = 64`. If does overflow, Start silently no-ops but `Stop` still pops unconditionally, which desyncs id-depth.
+- **Fixed size ring buffer**: 65536 samples per `(thread, ID)` by default (`BUFFER_PWR = 16`, must stay a power of 2 for bitmask-wrap).
 - **Cache friendly layout**: `alignas(64)` ring buffers and Structure of Arrays for the per thread stack, so only the timing fields a hot path needs land in the same cache line.
-- **Deferred calibration**: overhead measurement runs once, lazily, on first `DumpToStream`/`DumpToJson` call that needs it, not on every `Start`/`Stop`. Steady state sampling pays nothing for it.
-- **Bucket max IQR cleaning**: outlier detection runs on the max of 1000 sample buckets, not on raw samples. More robust against long tail latency spikes than a raw IQR pass.
-- **Compile time kill switch**: `LATTE_DISABLE` swaps every function and macro for a no-op with the same signature, so instrumented code compiles unchanged in a build with no observer effect at all.
+- **Deferred calibration**: overhead measurement runs once, on first `DumpToStream`/`DumpToJson` call that needs it.
+- **Bucket max IQR cleaning**: outlier detection runs on the max of 1000 sample buckets. More robust against long tail latency spikes than a raw IQR pass.
+- **Compile time kill switch**: `LATTE_DISABLE` swaps every function and macro for a no-op with the same signature.
 
 ### Data flow
 
@@ -195,7 +195,13 @@ Median cycles per region, single call unless noted (Start+Stop pairs double the 
 | Tracy | Tracy always on | 151.3 | 32.2 |
 | std::chrono | `std::chrono::now` x2 | 193.0 | 41.1 |
 
-Latte measures latency only. Caliper adds aggregation and tracing. Likwid adds hardware counter reads. Tracy adds profiler transport.
+
+**Context:**
+Latte: latency and traces
+Caliper: modular and contextual measurements
+Likwid: CPU performance counter measurement
+Tracy: live runtime event streaming for interactive profiling
+
 
 Measurement error vs a 4µs workload:
 
